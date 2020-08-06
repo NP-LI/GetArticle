@@ -3,6 +3,7 @@ from bs4 import BeautifulSoup
 from queue import Queue
 from threading import Thread
 import csv
+import re
 
 
 def get_content(html):
@@ -67,7 +68,7 @@ def delete_CRLF(string):
     return text.strip()
 
 
-def fetch_url(url):
+def fetch_url(url, get=True):
     """
     功能：访问 url 的网页，获取网页内容并返回
     参数：目标网页的 url
@@ -80,7 +81,14 @@ def fetch_url(url):
     i = 0
     while i < 3:
         try:
-            r = requests.get(url, headers=headers, timeout=5)
+            if get:
+                r = requests.get(url, headers=headers, timeout=5)
+            else:
+                data = {
+                    'q': '%E5%8D%B0%E6%96%B9',
+                    'sort': 'latest'
+                }
+                r = requests.post(url, data=data, headers=headers, timeout=5)
             return r.text
         except requests.exceptions.RequestException:
             i += 1
@@ -134,34 +142,6 @@ def get_article(url_q, article_q, article_path, error_url_path):
         url_q.task_done()
 
 
-def get_urls(link_q, url_q, url_path):
-    while link_q.empty() is not True:
-        link = link_q.get()
-        html = fetch_url(link)
-        if html is None:
-            continue
-        soup = BeautifulSoup(html, 'lxml')
-        divs = soup.find('div', attrs={'class': 'post_list left_col'}).find_all('div', attrs={'class': 'one_post'})
-        # print(divs)
-        j = 0
-        for div in divs:
-            url_q.put([delete_CRLF(div.find('span', attrs={'class': 'date'}).text),
-                       delete_CRLF(div.find('div', attrs={'class': 'title'}).text),
-                       delete_CRLF(div.find('div', attrs={'class': 'title'}).a['href'])])
-            j += 1
-        # lock.acquire()
-        # global now
-        print('已爬取第' + link.split('_')[1][:-4] + '页新闻链接\t' + '共' + str(j) + '个新闻')
-        # now += 1
-        # lock.release()
-        if url_q.empty() is not True:
-            with open(url_path, 'a+', newline='', encoding='utf-8') as f_w:
-                csv_f_w = csv.writer(f_w)
-                csv_f_w.writerows(url_q.queue)
-        url_q.queue.clear()
-        link_q.task_done()
-
-
 def get_article_start(url_path, article_path, error_url_path):
     url_queue = Queue()
     article_queue = Queue(maxsize=20)
@@ -190,23 +170,66 @@ def get_article_start(url_path, article_path, error_url_path):
             csv_f_w.writerows(article_queue.queue)
 
 
+def get_urls(link_q, url_q, url_path, get=True):
+    while link_q.empty() is not True:
+        link = link_q.get()
+        # try:
+        html = fetch_url(link, get)
+        if html is None:
+            continue
+        soup = BeautifulSoup(html, 'lxml')
+        tags = soup.find('div', attrs={'class': 'posts_list'}).find_all('li', attrs={'class': 'clear'})
+        # print(divs)
+        j = 0
+        for tag in tags:
+            if delete_CRLF(tag.find('div', attrs={'class': 'title'}).a['href']) not in url_list and re.search('印度|印军|印媒|印方|印', delete_CRLF(tag.find('div', attrs={'class': 'title'}).a.text)):
+                try:
+                    url_list.append(delete_CRLF(tag.find('div', attrs={'class': 'title'}).a['href']))
+                    url_q.put([delete_CRLF(tag.find('div', attrs={'class': 'title'}).find('span', attrs={'class': 'date'}).text),
+                               delete_CRLF(tag.find('div', attrs={'class': 'title'}).a.text),
+                               delete_CRLF(tag.find('div', attrs={'class': 'title'}).a['href'])])
+                    j += 1
+                except:
+                    print(link)
+                    print(tag)
+
+        # lock.acquire()
+        # global now
+        print('已爬取第' + link.split('_')[-1][:-4] + '页新闻链接\t' + '共' + str(j) + '个新闻')
+        # now += 1
+        # lock.release()
+        if url_q.empty() is not True:
+            with open(url_path, 'a+', newline='', encoding='utf-8') as f_w:
+                csv_f_w = csv.writer(f_w)
+                csv_f_w.writerows(url_q.queue)
+        # except:
+        #     print('线程出错')
+        url_q.queue.clear()
+        link_q.task_done()
+
+
 def get_urls_start(url_path):
     link_queue = Queue()
     url_queue = Queue()
-    for i in range(6681, 9216):
-        link_queue.put('https://www.epochtimes.com/gb/nsc418_' + str(i) + '.htm')
+    link_queue.put('https://www.epochtimes.com/gb/search.htm')
+    for i in range(2, 28):
+        link_queue.put('https://www.epochtimes.com/gb/search_' + str(i) + '.htm')
+
     for index in range(10):
-        thread = Thread(target=get_urls, args=(link_queue, url_queue, url_path, ))
+        thread = Thread(target=get_urls, args=(link_queue, url_queue, url_path, False, ))
         thread.daemon = True  # 随主线程退出而退出
         thread.start()
     link_queue.join()
 
 
 if __name__ == '__main__':
+    url_list = []
     # now = 1
     # lock = threading.Lock()
-    get_article_start('data/大纪元/国际要闻/国际要闻链接4.csv', 'data/大纪元/国际要闻/国际要闻新闻6.csv', 'data/大纪元/error_urls_1.csv')
-    # get_urls_start('data/大纪元/国际要闻链接总.csv')
+    # get_article_start('data/大纪元/国际要闻/国际要闻链接4.csv', 'data/大纪元/国际要闻/国际要闻新闻6.csv', 'data/大纪元/error_urls_1.csv')
+    get_urls_start('data/大纪元/印方搜索链接.csv')
+    # html = fetch_url('https://www.epochtimes.com/gb/search_3.htm')
+    # print(html)
 
 
 
